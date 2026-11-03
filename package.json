@@ -1,0 +1,12 @@
+{
+  "name": "trackprojektor",
+  "private": true,
+  "description": "GPX-Route perspektivisch in ein Foto legen",
+  "scripts": {
+    "test": "node test/smoke.mjs",
+    "start": "python3 -m http.server 8000"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.0.0"
+  }
+}
