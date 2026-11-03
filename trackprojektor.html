@@ -1,0 +1,1122 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trackprojektor — GPX-Route perspektivisch ins Foto</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root{
+    --bg:#10141a; --panel:#161c25; --line:#26303d; --ink:#e6ecf3;
+    --muted:#8ba0b6; --accent:#ffd166; --ok:#5ad1a0; --warn:#ff8f6b;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:13px/1.45 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;
+    display:flex; flex-direction:column;
+  }
+  header{
+    display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;
+    padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel);
+  }
+  header h1{font-size:14px;margin:0;letter-spacing:.14em;text-transform:uppercase}
+  header span{color:var(--muted);font-size:12px}
+  main{flex:1; display:flex; min-height:0}
+  #side{
+    width:320px; flex:none; overflow-y:auto; padding:14px 16px 60px;
+    border-right:1px solid var(--line); background:var(--panel);
+  }
+  #stage{flex:1; position:relative; display:flex; align-items:center; justify-content:center; overflow:hidden; padding:12px}
+  #frame{position:relative; line-height:0; box-shadow:0 0 0 1px var(--line)}
+  #photo{display:block; max-width:100%; max-height:100%}
+  #gl{position:absolute; inset:0; cursor:grab}
+  #ov{position:absolute; inset:0; pointer-events:none}
+  #gl.erasing{cursor:crosshair}
+  #gl.dragging{cursor:grabbing}
+  #empty{color:var(--muted); text-align:center; max-width:340px}
+  h2{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
+     margin:20px 0 8px; padding-bottom:5px; border-bottom:1px solid var(--line)}
+  h2:first-child{margin-top:0}
+  label.row{display:flex; justify-content:space-between; align-items:center; gap:8px; margin:8px 0 2px}
+  label.row b{font-weight:500}
+  label.row i{font-style:normal; color:var(--accent); font-variant-numeric:tabular-nums; font-size:12px}
+  input[type=range]{width:100%; accent-color:var(--accent)}
+  input[type=text],input[type=number]{
+    width:100%; background:#0c1015; color:var(--ink); border:1px solid var(--line);
+    border-radius:4px; padding:5px 7px; font:12px ui-monospace,monospace;
+  }
+  .two{display:flex; gap:8px}
+  .two>*{flex:1; min-width:0}
+  button{
+    width:100%; margin-top:8px; padding:8px 10px; border-radius:4px; cursor:pointer;
+    background:#1f2836; color:var(--ink); border:1px solid var(--line); font:inherit;
+  }
+  button:hover{background:#27313f}
+  button.primary{background:var(--accent); color:#10141a; border-color:var(--accent); font-weight:600}
+  button:disabled{opacity:.45; cursor:not-allowed}
+  .file{display:block; margin-top:6px; font-size:12px; color:var(--muted)}
+  .file input{display:block; margin-top:4px; width:100%; font-size:11px}
+  .seg{display:flex; gap:4px; margin-top:6px}
+  .seg button{margin:0; padding:5px 4px; font-size:11px}
+  .seg button[aria-pressed=true]{background:var(--accent); color:#10141a; border-color:var(--accent)}
+  .hint{color:var(--muted); font-size:11px; margin:6px 0 0}
+  #log{margin-top:8px; font:11px/1.4 ui-monospace,monospace; color:var(--muted); white-space:pre-wrap}
+  #log .err{color:var(--warn)}
+  #log .ok{color:var(--ok)}
+  .swatches{display:flex; gap:6px; margin-top:6px}
+  .swatches button{width:26px;height:26px;margin:0;padding:0;border-radius:50%}
+  @media (max-width:800px){ main{flex-direction:column} #side{width:auto;border-right:0;border-bottom:1px solid var(--line)} }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Trackprojektor</h1>
+  <span>GPX-Route perspektivisch in ein Foto legen — Standort setzen, drehen bis es passt, Verdecktes wegnehmen.</span>
+</header>
+
+<main>
+<div id="side">
+
+  <h2>1 · Dateien</h2>
+  <label class="file">Foto (JPG/PNG)
+    <input type="file" id="fPhoto" accept="image/*">
+  </label>
+  <label class="file">GPX-Track
+    <input type="file" id="fGpx" accept=".gpx,application/gpx+xml,text/xml">
+  </label>
+  <div id="log"></div>
+
+  <h2>2 · Aufnahmestandort</h2>
+  <div class="two">
+    <div><label class="row"><b>Breite</b></label><input type="text" id="camLat" value="46.900" ></div>
+    <div><label class="row"><b>Länge</b></label><input type="text" id="camLon" value="12.100"></div>
+  </div>
+  <label class="row"><b>Auf dem Track bei</b><i id="vAlong">–</i></label>
+  <input type="range" id="along" min="0" max="1000" value="0">
+  <label class="row"><b>Standorthöhe (m ü. NN)</b></label>
+  <input type="number" id="camEle" value="0" step="10">
+  <label class="row"><b>Augenhöhe über Grund</b><i id="vEye">1.6 m</i></label>
+  <input type="range" id="eye" min="0" max="60" step="0.5" value="1.6">
+  <p class="hint">Standort kommt aus den EXIF-Daten des Fotos, sonst hier eintragen oder mit dem Regler auf den Track legen.</p>
+
+  <h2>3 · Blickrichtung</h2>
+  <label class="row"><b>Azimut (0° = Nord)</b><i id="vYaw">0.0°</i></label>
+  <input type="range" id="yaw" min="-180" max="180" step="0.1" value="0">
+  <label class="row"><b>Neigung</b><i id="vPitch">0.0°</i></label>
+  <input type="range" id="pitch" min="-89" max="89" step="0.1" value="0">
+  <label class="row"><b>Rollwinkel</b><i id="vRoll">0.0°</i></label>
+  <input type="range" id="roll" min="-15" max="15" step="0.05" value="0">
+  <label class="row"><b>Bildwinkel horizontal</b><i id="vFov">65.0°</i></label>
+  <input type="range" id="fov" min="8" max="140" step="0.1" value="65">
+  <label class="row"><b>Verzeichnung k1</b><i id="vK1">0.000</i></label>
+  <input type="range" id="k1" min="-0.25" max="0.25" step="0.002" value="0">
+  <button id="aim">Kamera auf den Track richten</button>
+  <p class="hint">Im Bild ziehen = drehen · Umschalt+ziehen = rollen · Mausrad = Bildwinkel.</p>
+  <div id="diag"></div>
+
+  <h2>4 · Gelände &amp; Verdeckung</h2>
+  <div class="two">
+    <div><label class="row"><b>Radius km</b></label><input type="number" id="terRadius" value="15" min="2" max="60" step="1"></div>
+    <div><label class="row"><b>Zoom</b></label><input type="number" id="terZoom" value="12" min="9" max="14" step="1"></div>
+  </div>
+  <button id="loadTerrain">Höhendaten laden</button>
+  <button id="trackFromDem" disabled>Track-Höhen aus dem Geländemodell</button>
+  <label class="row"><b>Geländeansicht</b></label>
+  <div class="seg" id="terView">
+    <button data-v="off" aria-pressed="true">aus</button>
+    <button data-v="wire" aria-pressed="false">Gitter</button>
+    <button data-v="solid" aria-pressed="false">schattiert</button>
+  </div>
+  <label class="row"><b>Deckkraft Gelände</b><i id="vTerOp">45 %</i></label>
+  <input type="range" id="terOp" min="5" max="100" step="5" value="45">
+  <label class="row"><b>Track hinter Bergen ausblenden</b><input type="checkbox" id="occl" checked></label>
+  <p class="hint">Das Gitter hilft beim Ausrichten: Grate zur Deckung bringen, dann wieder ausschalten.</p>
+
+  <h2>5 · Linie</h2>
+  <label class="row"><b>Breite</b><i id="vWidth">4 px</i></label>
+  <input type="range" id="width" min="1" max="20" step="0.5" value="4">
+  <label class="row"><b>Deckkraft</b><i id="vOp">100 %</i></label>
+  <input type="range" id="op" min="10" max="100" step="5" value="100">
+  <div class="swatches" id="colors"></div>
+  <label class="row"><b>Dünne Ersatzlinie zusätzlich</b><input type="checkbox" id="thin"></label>
+
+  <h2>6 · Retusche</h2>
+  <div class="seg" id="mode">
+    <button data-m="rotate" aria-pressed="true">Drehen</button>
+    <button data-m="erase" aria-pressed="false">Radierer</button>
+    <button data-m="pin" aria-pressed="false">Passpunkte</button>
+  </div>
+  <label class="row"><b>Pinselgröße</b><i id="vBrush">30 px</i></label>
+  <input type="range" id="brush" min="5" max="150" step="5" value="30">
+  <button id="resetErase">Alle Ausblendungen zurücknehmen</button>
+  <p class="hint">Im Radierer-Modus über die Linie ziehen, um Stücke zu entfernen. Mit Alt gedrückt kommen sie zurück.</p>
+
+  <h2>7 · Kalibrierung über Passpunkte</h2>
+  <p class="hint">Modus „Passpunkte“ wählen, dann auf der roten Linie anfassen und dorthin
+  ziehen, wo die Stelle im Foto wirklich liegt. Ein Punkt bestimmt die Drehung,
+  zwei bestimmen zusätzlich den Bildwinkel, drei auch den Rollwinkel.</p>
+  <button id="solve">Ausrichtung berechnen</button>
+  <button id="clearPins">Passpunkte löschen</button>
+  <div id="calib"></div>
+
+  <h2>8 · Export</h2>
+  <button id="save" class="primary">Bild als PNG sichern</button>
+</div>
+
+<div id="stage">
+  <div id="empty">Foto und GPX-Datei laden, um zu beginnen.</div>
+  <div id="frame" style="display:none">
+    <img id="photo" alt="">
+    <canvas id="gl"></canvas>
+    <canvas id="ov"></canvas>
+  </div>
+</div>
+</main>
+
+<script>
+"use strict";
+/* ---------------------------------------------------------------
+   Trackprojektor — Foto + GPX, perspektivisch ausgerichtet.
+   Alles läuft lokal im Browser. Höhendaten: AWS Terrain Tiles.
+---------------------------------------------------------------- */
+
+const TILE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+const R_EARTH = 6371000;
+const K_REFR  = 0.87;           // Erdkrümmung abzgl. atmosphärischer Refraktion
+const $ = id => document.getElementById(id);
+
+const state = {
+  photo:null, track:null,        // track: [{lat,lon,ele}]
+  origin:{lat:46.9, lon:12.1},   // lokaler Ursprung = Kamerastandort
+  yaw:0, pitch:0, roll:0, hfov:65,
+  eye:1.6, camEle:0,
+  color:"#ff3b30", width:4, opacity:1, k1:0, pins:[],
+  segVis:null,
+  dem:null                       // {z, tiles:Map}
+};
+
+/* ---------- Log ---------- */
+function log(msg, cls){
+  const el = $("log");
+  el.innerHTML = '<span class="'+(cls||"")+'">'+msg+"</span>";
+}
+
+/* ---------- Geo ---------- */
+function mPerDegLon(lat){ return 111320 * Math.cos(lat*Math.PI/180); }
+const M_PER_DEG_LAT = 110540;
+
+function toLocal(lat, lon, ele){
+  const x = (lon - state.origin.lon) * mPerDegLon(state.origin.lat);
+  const n = (lat - state.origin.lat) * M_PER_DEG_LAT;
+  const drop = K_REFR * (x*x + n*n) / (2*R_EARTH);
+  return [x, ele - drop, -n];
+}
+
+/* ---------- EXIF (JPEG): GPS + Brennweite + Blickrichtung ---------- */
+function readExif(buf){
+  const dv = new DataView(buf);
+  if (dv.byteLength < 4 || dv.getUint16(0) !== 0xFFD8) return null;
+  let off = 2;
+  while (off + 4 < dv.byteLength){
+    const marker = dv.getUint16(off);
+    if ((marker & 0xFF00) !== 0xFF00) return null;
+    const len = dv.getUint16(off+2);
+    if (marker === 0xFFE1 && dv.getUint32(off+4) === 0x45786966) return readTiff(dv, off+10);
+    off += 2 + len;
+  }
+  return null;
+}
+function readTiff(dv, base){
+  const le = dv.getUint16(base) === 0x4949;
+  const u16 = o => dv.getUint16(o, le);
+  const u32 = o => dv.getUint32(o, le);
+  function ifd(start){
+    const out = {};
+    if (start + 2 > dv.byteLength) return out;
+    const n = u16(start);
+    for (let i=0;i<n;i++){
+      const e = start + 2 + i*12;
+      if (e + 12 > dv.byteLength) break;
+      const tag = u16(e), type = u16(e+2), count = u32(e+4);
+      const sizes = {1:1,2:1,3:2,4:4,5:8,7:1,9:4,10:8};
+      const sz = (sizes[type]||1) * count;
+      const vo = sz > 4 ? base + u32(e+8) : e + 8;
+      if (vo + sz > dv.byteLength) continue;
+      let v;
+      if (type === 2){
+        let s = "";
+        for (let k=0;k<count-1;k++) s += String.fromCharCode(dv.getUint8(vo+k));
+        v = s;
+      } else if (type === 5 || type === 10){
+        v = [];
+        for (let k=0;k<count;k++){
+          const num = type===5 ? u32(vo+k*8) : dv.getInt32(vo+k*8, le);
+          const den = type===5 ? u32(vo+k*8+4) : dv.getInt32(vo+k*8+4, le);
+          v.push(den ? num/den : null);
+        }
+        if (count === 1) v = v[0];
+      } else if (type === 3){
+        v = u16(vo);
+      } else if (type === 4){
+        v = u32(vo);
+      } else {
+        v = dv.getUint8(vo);
+      }
+      out[tag] = v;
+    }
+    return out;
+  }
+  const i0 = ifd(base + u32(base+4));
+  const res = {};
+  if (i0[0x8769]) {
+    const ex = ifd(base + i0[0x8769]);
+    if (ex[0xA405]) res.focal35 = ex[0xA405];
+  }
+  if (i0[0x8825]){
+    const g = ifd(base + i0[0x8825]);
+    // Viele Handys schreiben leere GPS-Felder (alles 0), wenn die Ortung aus war.
+    const dms = a => (Array.isArray(a) && a.length === 3 && a.every(x => x !== null))
+                     ? a[0] + a[1]/60 + a[2]/3600 : null;
+    const la = dms(g[2]), lo = dms(g[4]);
+    const refOk = (g[1] === "N" || g[1] === "S") && (g[3] === "E" || g[3] === "W");
+    if (la !== null && lo !== null && refOk && (Math.abs(la) > 1e-6 || Math.abs(lo) > 1e-6)){
+      res.lat = la * (g[1] === "S" ? -1 : 1);
+      res.lon = lo * (g[3] === "W" ? -1 : 1);
+    }
+    if (g[6] != null && g[6] !== 0) res.ele = g[5] === 1 ? -g[6] : g[6];
+    if (g[17] != null && (g[16] === "T" || g[16] === "M")) res.heading = g[17];
+  }
+  return res;
+}
+
+/* ---------- GPX ---------- */
+function parseGpx(text){
+  const doc = new DOMParser().parseFromString(text, "application/xml");
+  if (doc.querySelector("parsererror")) throw new Error("GPX nicht lesbar");
+  const pts = [];
+  doc.querySelectorAll("trkpt, rtept").forEach(p => {
+    const lat = parseFloat(p.getAttribute("lat"));
+    const lon = parseFloat(p.getAttribute("lon"));
+    const eEl = p.querySelector("ele");
+    if (isFinite(lat) && isFinite(lon))
+      pts.push({lat, lon, ele: eEl ? parseFloat(eEl.textContent) || 0 : 0});
+  });
+  if (pts.length < 2) throw new Error("Keine Trackpunkte gefunden");
+  // Ausreißer glätten: identische Punkte raus
+  const out = [pts[0]];
+  for (let i=1;i<pts.length;i++){
+    const a = out[out.length-1], b = pts[i];
+    if (Math.abs(a.lat-b.lat) > 1e-7 || Math.abs(a.lon-b.lon) > 1e-7) out.push(b);
+  }
+  return out;
+}
+
+/* ---------- Terrain-Kacheln ---------- */
+function lon2px(lon, z){ return (lon+180)/360 * Math.pow(2,z) * 256; }
+function lat2px(lat, z){
+  const r = lat*Math.PI/180;
+  return (1 - Math.log(Math.tan(r) + 1/Math.cos(r))/Math.PI)/2 * Math.pow(2,z) * 256;
+}
+function loadTile(z,x,y){
+  return new Promise(res => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = c.height = 256;
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img,0,0);
+      try { res(ctx.getImageData(0,0,256,256).data); }
+      catch(e){ res(null); }
+    };
+    img.onerror = () => res(null);
+    img.src = TILE_URL.replace("{z}",z).replace("{x}",x).replace("{y}",y);
+  });
+}
+function demElevPx(dem, px, py){
+  const tx = Math.floor(px/256), ty = Math.floor(py/256);
+  const d = dem.tiles.get(tx+"/"+ty);
+  if (!d) return null;
+  const ix = Math.min(255, Math.max(0, Math.floor(px) - tx*256));
+  const iy = Math.min(255, Math.max(0, Math.floor(py) - ty*256));
+  const i = (iy*256 + ix) * 4;
+  return d[i]*256 + d[i+1] + d[i+2]/256 - 32768;
+}
+function demElev(dem, lat, lon){
+  const v = demElevPx(dem, lon2px(lon, dem.z), lat2px(lat, dem.z));
+  return v === null ? 0 : v;
+}
+
+/* ---------- three.js ---------- */
+let renderer, scene, camera, trackMesh, thinLine, occluder, terrainSolid, terrainWire;
+const lineUniforms = {
+  uColor:      { value: new THREE.Color("#ff3b30") },
+  uWidth:      { value: 4 },
+  uOpacity:    { value: 1 },
+  uResolution: { value: new THREE.Vector2(1,1) },
+  uK1:         { value: 0 },
+  uAspect:     { value: 1.5 }
+};
+
+const DISTORT_GLSL = `
+  uniform float uK1;
+  uniform float uAspect;
+  vec4 distortClip(vec4 c){
+    if (uK1 == 0.0 || c.w <= 0.0) return c;
+    vec2 n = c.xy / c.w;
+    n.x *= uAspect;
+    n *= (1.0 + uK1 * dot(n, n));
+    n.x /= uAspect;
+    return vec4(n * c.w, c.z, c.w);
+  }`;
+
+const LINE_VS = DISTORT_GLSL + `
+  attribute vec3 aOther;
+  attribute float aSide;
+  attribute float aDirSign;
+  attribute float aVis;
+  uniform vec2 uResolution;
+  uniform float uWidth;
+  varying float vVis;
+  varying float vClip;
+  void main(){
+    vVis = aVis;
+    vec4 cA = distortClip(projectionMatrix * modelViewMatrix * vec4(position, 1.0));
+    vec4 cB = distortClip(projectionMatrix * modelViewMatrix * vec4(aOther, 1.0));
+    vClip = (cA.w > 0.01 && cB.w > 0.01) ? 1.0 : 0.0;
+    float aspect = uResolution.x / uResolution.y;
+    vec2 sA = (cA.xy / max(cA.w, 0.001)) * vec2(aspect, 1.0);
+    vec2 sB = (cB.xy / max(cB.w, 0.001)) * vec2(aspect, 1.0);
+    vec2 dir = sB - sA;
+    if (length(dir) < 1e-6) dir = vec2(1.0, 0.0);
+    dir = normalize(dir) * aDirSign;
+    vec2 nrm = vec2(-dir.y, dir.x) / vec2(aspect, 1.0);
+    float px = uWidth / uResolution.y;   // halbe Breite in NDC-Einheiten
+    cA.xy += nrm * aSide * px * cA.w;
+    gl_Position = cA;
+  }`;
+const LINE_FS = `
+  uniform vec3 uColor;
+  uniform float uOpacity;
+  varying float vVis;
+  varying float vClip;
+  void main(){
+    if (vVis < 0.5 || vClip < 0.5) discard;
+    gl_FragColor = vec4(uColor, uOpacity);
+  }`;
+
+function initGL(){
+  const canvas = $("gl");
+  renderer = new THREE.WebGLRenderer({canvas, alpha:true, antialias:true, preserveDrawingBuffer:true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(50, 1, 10, 120000);
+  camera.rotation.order = "YXZ";
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+  sun.position.set(-1, 1.4, -0.6);
+  scene.add(sun);
+}
+
+/* Track als Streifen aus Einzelsegmenten (konstante Pixelbreite) */
+function buildTrack(){
+  if (trackMesh){ scene.remove(trackMesh); trackMesh.geometry.dispose(); trackMesh = null; }
+  if (!state.track) return;
+  const pts = state.track.map(p => toLocal(p.lat, p.lon, p.ele));
+  const n = pts.length - 1;
+  const pos = new Float32Array(n*4*3);
+  const oth = new Float32Array(n*4*3);
+  const side = new Float32Array(n*4);
+  const dsg  = new Float32Array(n*4);
+  const vis  = new Float32Array(n*4);
+  const idx  = new Uint32Array(n*6);
+  if (!state.segVis || state.segVis.length !== n) state.segVis = new Uint8Array(n).fill(1);
+  for (let i=0;i<n;i++){
+    const A = pts[i], B = pts[i+1];
+    const v = state.segVis[i];
+    const put = (k, P, Q, s, d) => {
+      const j = (i*4+k);
+      pos[j*3]=P[0]; pos[j*3+1]=P[1]; pos[j*3+2]=P[2];
+      oth[j*3]=Q[0]; oth[j*3+1]=Q[1]; oth[j*3+2]=Q[2];
+      side[j]=s; dsg[j]=d; vis[j]=v;
+    };
+    put(0, A, B,  1,  1);
+    put(1, A, B, -1,  1);
+    put(2, B, A,  1, -1);
+    put(3, B, A, -1, -1);
+    const b = i*4;
+    idx.set([b, b+1, b+2, b+1, b+3, b+2], i*6);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(pos,3));
+  g.setAttribute("aOther",   new THREE.BufferAttribute(oth,3));
+  g.setAttribute("aSide",    new THREE.BufferAttribute(side,1));
+  g.setAttribute("aDirSign", new THREE.BufferAttribute(dsg,1));
+  g.setAttribute("aVis",     new THREE.BufferAttribute(vis,1));
+  g.setIndex(new THREE.BufferAttribute(idx,1));
+  g.computeBoundingSphere();
+  const m = new THREE.ShaderMaterial({
+    uniforms: lineUniforms, vertexShader: LINE_VS, fragmentShader: LINE_FS,
+    transparent:true, depthTest:true, depthWrite:false, side:THREE.DoubleSide
+  });
+  trackMesh = new THREE.Mesh(g, m);
+  trackMesh.frustumCulled = false;
+  trackMesh.renderOrder = 3;
+  scene.add(trackMesh);
+  state.segPts = pts;
+  buildThinLine();
+}
+
+/* Ersatzlinie: 1 px, ohne eigenen Shader — falls die breite Linie
+   auf einer Grafikkarte zickt, ist wenigstens etwas zu sehen. */
+function buildThinLine(){
+  if (thinLine){ scene.remove(thinLine); thinLine.geometry.dispose(); thinLine = null; }
+  if (!state.segPts || !$("thin").checked) return;
+  const keep = [];
+  for (let i=0;i<state.segVis.length;i++){
+    if (!state.segVis[i]) continue;
+    keep.push(...state.segPts[i], ...state.segPts[i+1]);
+  }
+  if (!keep.length) return;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(keep), 3));
+  thinLine = new THREE.LineSegments(g, new THREE.LineBasicMaterial({
+    color: new THREE.Color(state.color), transparent:true, opacity:state.opacity, depthWrite:false
+  }));
+  thinLine.frustumCulled = false;
+  thinLine.renderOrder = 4;
+  scene.add(thinLine);
+}
+
+function setSegVisibility(){
+  if (!trackMesh) return;
+  const a = trackMesh.geometry.getAttribute("aVis");
+  for (let i=0;i<state.segVis.length;i++){
+    const v = state.segVis[i];
+    a.array[i*4] = a.array[i*4+1] = a.array[i*4+2] = a.array[i*4+3] = v;
+  }
+  a.needsUpdate = true;
+  buildThinLine();
+  render();
+}
+
+/* Geländemesh aus dem DEM */
+function withDistortion(mat){
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.uK1 = lineUniforms.uK1;
+    sh.uniforms.uAspect = lineUniforms.uAspect;
+    sh.vertexShader = DISTORT_GLSL + "\n" + sh.vertexShader.replace(
+      "#include <project_vertex>",
+      "#include <project_vertex>\n  gl_Position = distortClip(gl_Position);");
+  };
+  return mat;
+}
+
+function buildTerrain(dem, radiusM){
+  [occluder, terrainSolid, terrainWire].forEach(o => { if (o) scene.remove(o); });
+  const N = 320;                                  // Gitterauflösung
+  const step = (radiusM*2) / N;
+  const verts = new Float32Array((N+1)*(N+1)*3);
+  const cosLat = mPerDegLon(state.origin.lat);
+  let k = 0;
+  for (let j=0;j<=N;j++){
+    const north = radiusM - j*step;
+    const lat = state.origin.lat + north / M_PER_DEG_LAT;
+    for (let i=0;i<=N;i++){
+      const east = -radiusM + i*step;
+      const lon = state.origin.lon + east / cosLat;
+      const ele = demElev(dem, lat, lon);
+      const drop = K_REFR * (east*east + north*north) / (2*R_EARTH);
+      verts[k++] = east; verts[k++] = ele - drop; verts[k++] = -north;
+    }
+  }
+  const idx = new Uint32Array(N*N*6);
+  let t = 0;
+  for (let j=0;j<N;j++) for (let i=0;i<N;i++){
+    const a = j*(N+1)+i, b = a+1, c = a+N+1, d = c+1;
+    idx[t++]=a; idx[t++]=c; idx[t++]=b; idx[t++]=b; idx[t++]=c; idx[t++]=d;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(verts,3));
+  g.setIndex(new THREE.BufferAttribute(idx,1));
+  g.computeVertexNormals();
+  g.computeBoundingSphere();
+
+  occluder = new THREE.Mesh(g, withDistortion(new THREE.MeshBasicMaterial({colorWrite:false})));
+  occluder.renderOrder = 0;
+  terrainSolid = new THREE.Mesh(g, withDistortion(new THREE.MeshLambertMaterial({
+    color:0x8fb4d6, transparent:true, opacity:0.45, depthWrite:false
+  })));
+  terrainSolid.renderOrder = 1; terrainSolid.visible = false;
+  terrainWire = new THREE.Mesh(g, withDistortion(new THREE.MeshBasicMaterial({
+    color:0x66e0c0, wireframe:true, transparent:true, opacity:0.45, depthWrite:false
+  })));
+  terrainWire.renderOrder = 2; terrainWire.visible = false;
+  [occluder, terrainSolid, terrainWire].forEach(o => { o.frustumCulled = false; scene.add(o); });
+  applyOcclusion();
+}
+function applyOcclusion(){ if (occluder) occluder.visible = $("occl").checked; }
+
+
+/* ---------- Passpunkte & Kalibrierung ---------- */
+const D2R = Math.PI/180;
+const tmpCam = new THREE.PerspectiveCamera();
+tmpCam.rotation.order = "YXZ";
+tmpCam.near = 10; tmpCam.far = 120000;   // sonst fallen ferne Trackpunkte hinten raus
+
+/* NDC-Verzeichnung, identisch zum Shader */
+function distortNdc(x, y, ar, k1){
+  if (!k1) return [x, y];
+  let nx = x*ar, ny = y;
+  const sc = 1 + k1*(nx*nx + ny*ny);
+  return [nx*sc/ar, ny*sc];
+}
+/* Projiziert einen lokalen Punkt mit frei wählbaren Kameraparametern -> [0..1] Bildkoordinaten */
+function projectWith(pt, yaw, pitch, hfov, roll, k1){
+  const ar = camera.aspect || 1.3333;
+  tmpCam.position.set(0, state.camEle + state.eye, 0);
+  tmpCam.rotation.set(pitch*D2R, -yaw*D2R, roll*D2R);
+  tmpCam.aspect = ar;
+  tmpCam.fov = 2*Math.atan(Math.tan(hfov*D2R/2)/ar)/D2R;
+  tmpCam.updateProjectionMatrix();
+  tmpCam.updateMatrixWorld(true);
+  const v = new THREE.Vector3().fromArray(pt).project(tmpCam);
+  if (v.z > 1) return null;
+  const [dx, dy] = distortNdc(v.x, v.y, ar, k1);
+  return [(dx+1)/2, (1-dy)/2];
+}
+/* Mittlerer Pixelfehler über alle Passpunkte */
+function pinError(yaw, pitch, hfov, roll, k1){
+  const W = state.photo ? state.photo.naturalWidth : 4000;
+  const H = state.photo ? state.photo.naturalHeight : 3000;
+  let sum = 0;
+  for (const pin of state.pins){
+    const pr = projectWith(state.segPts[pin.seg], yaw, pitch, hfov, roll, k1);
+    if (!pr) return 1e9;
+    sum += Math.hypot((pr[0]-pin.nx)*W, (pr[1]-pin.ny)*H);
+  }
+  return sum / state.pins.length;
+}
+/* Zyklische Koordinatensuche — robust und für 4 Parameter schnell genug */
+function solveCalibration(){
+  if (!state.pins.length || !state.segPts){
+    $("calib").innerHTML = '<span class="err">Erst Passpunkte setzen.</span>'; return;
+  }
+  const n = state.pins.length;
+  let cur = {yaw:state.yaw, pitch:state.pitch, hfov:state.hfov, roll:state.roll, k1:state.k1};
+  // Was darf variiert werden? Jeder Passpunkt liefert zwei Gleichungen.
+  const free = ["yaw","pitch"];
+  if (n >= 2) free.push("hfov");
+  if (n >= 3) free.push("roll");
+  if (n >= 4) free.push("k1");
+  let span = {yaw:25, pitch:25, hfov:40, roll:10, k1:0.2};
+  let best = pinError(cur.yaw, cur.pitch, cur.hfov, cur.roll, cur.k1);
+  for (let pass=0; pass<60; pass++){
+    for (const key of free){
+      const base = cur[key], st = span[key]/8;
+      let bv = base;
+      for (let i=-8;i<=8;i++){
+        if (i === 0) continue;
+        const t = {...cur}; t[key] = base + i*st;
+        if (key === "hfov" && (t.hfov < 5 || t.hfov > 160)) continue;
+        const e = pinError(t.yaw, t.pitch, t.hfov, t.roll, t.k1);
+        if (e < best){ best = e; bv = t[key]; }
+      }
+      cur[key] = bv;
+    }
+    for (const k in span) span[k] *= 0.72;
+  }
+  const setS = (id, v) => { $(id).value = v; $(id).dispatchEvent(new Event("input")); };
+  setS("yaw", cur.yaw.toFixed(2));
+  setS("pitch", cur.pitch.toFixed(2));
+  if (free.includes("hfov")) setS("fov", cur.hfov.toFixed(2));
+  if (free.includes("roll")) setS("roll", cur.roll.toFixed(2));
+  if (free.includes("k1"))   setS("k1", cur.k1.toFixed(3));
+  const solved = free.map(f => ({yaw:"Azimut",pitch:"Neigung",hfov:"Bildwinkel",
+                                 roll:"Rollwinkel",k1:"Verzeichnung"})[f]).join(", ");
+  $("calib").innerHTML = n + " Passpunkt(e) · gelöst: " + solved
+    + '\n<span class="' + (best < 25 ? "ok" : "err") + '">mittlerer Restfehler '
+    + best.toFixed(1) + " px</span>"
+    + (n < 2 ? "\nFür den Bildwinkel wird ein zweiter Passpunkt gebraucht." : "");
+  render();
+}
+/* Zeichnet Passpunkte und ihre Restfehler über das Bild */
+function drawOverlay(){
+  const cv = $("ov"), r = $("gl").getBoundingClientRect();
+  if (!cv.width) return;
+  const ctx = cv.getContext("2d");
+  ctx.clearRect(0,0,cv.width,cv.height);
+  if (mode !== "pin" || !state.pins.length) return;
+  const W = cv.width, H = cv.height;
+  state.pins.forEach((pin, i) => {
+    const tx = pin.nx*W, ty = pin.ny*H;
+    const pr = projectWith(state.segPts[pin.seg], state.yaw, state.pitch,
+                           state.hfov, state.roll, state.k1);
+    ctx.lineWidth = 2;
+    if (pr){
+      ctx.strokeStyle = "rgba(255,209,102,.9)";
+      ctx.beginPath(); ctx.moveTo(pr[0]*W, pr[1]*H); ctx.lineTo(tx, ty); ctx.stroke();
+    }
+    ctx.strokeStyle = "#ffd166"; ctx.fillStyle = "rgba(0,0,0,.45)";
+    ctx.beginPath(); ctx.arc(tx, ty, 9, 0, 6.284); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#ffd166"; ctx.font = "11px monospace";
+    ctx.fillText(String(i+1), tx+12, ty-8);
+  });
+}
+/* Nächstgelegenes Tracksegment zu einem Bildpunkt */
+function nearestSegment(nx, ny){
+  const ar = camera.aspect || 1.3333;
+  const v = new THREE.Vector3();
+  let best = -1, bd = Infinity;
+  const step = Math.max(1, Math.floor(state.segPts.length/2000));
+  for (let i=0;i<state.segPts.length;i+=step){
+    v.fromArray(state.segPts[i]).project(camera);
+    if (v.z > 1) continue;
+    const [dx, dy] = distortNdc(v.x, v.y, ar, state.k1);
+    const d = Math.hypot((dx+1)/2 - nx, (1-dy)/2 - ny);
+    if (d < bd){ bd = d; best = i; }
+  }
+  return bd < 0.06 ? best : -1;
+}
+
+/* ---------- Layout / Rendering ---------- */
+function layout(){
+  if (!state.photo) return;
+  const stage = $("stage"), img = $("photo"), frame = $("frame");
+  const pad = 24;
+  const aw = stage.clientWidth - pad, ah = stage.clientHeight - pad;
+  const ar = state.photo.naturalWidth / state.photo.naturalHeight;
+  let w = aw, h = w / ar;
+  if (h > ah){ h = ah; w = h * ar; }
+  frame.style.width = w+"px"; frame.style.height = h+"px";
+  img.style.width = w+"px"; img.style.height = h+"px";
+  renderer.setSize(w, h, false);
+  $("gl").style.width = w+"px"; $("gl").style.height = h+"px";
+  const ov = $("ov");
+  ov.width = Math.round(w); ov.height = Math.round(h);
+  ov.style.width = w+"px"; ov.style.height = h+"px";
+  camera.aspect = ar;
+  lineUniforms.uAspect.value = ar;
+  lineUniforms.uResolution.value.set(w, h);
+  render();
+}
+function updateCamera(){
+  camera.position.set(0, state.camEle + state.eye, 0);
+  camera.rotation.set(
+    state.pitch * Math.PI/180,
+    -state.yaw  * Math.PI/180,
+    state.roll  * Math.PI/180
+  );
+  const ar = camera.aspect || 1.5;
+  const hf = state.hfov * Math.PI/180;
+  camera.fov = 2 * Math.atan(Math.tan(hf/2) / ar) * 180/Math.PI;
+  camera.updateProjectionMatrix();
+}
+function render(){
+  if (!renderer) return;
+  updateCamera();                       // auch ohne Foto — sonst bleibt die Kamera veraltet
+  if (!state.photo) return;
+  lineUniforms.uColor.value.set(state.color);
+  lineUniforms.uWidth.value = state.width;
+  lineUniforms.uOpacity.value = state.opacity;
+  if (thinLine){
+    thinLine.material.color.set(state.color);
+    thinLine.material.opacity = state.opacity;
+  }
+  lineUniforms.uK1.value = state.k1;
+  lineUniforms.uAspect.value = camera.aspect || 1.3333;
+  renderer.render(scene, camera);
+  drawOverlay();
+  updateDiag();
+}
+
+/* Wo liegt der Track relativ zur Kamera, und ist gerade etwas im Bild? */
+function updateDiag(){
+  const el = $("diag");
+  if (!state.segPts || !state.segPts.length){ el.textContent = ""; return; }
+  const v = new THREE.Vector3();
+  const step = Math.max(1, Math.floor(state.segPts.length/400));
+  let inFrame = 0, checked = 0, near = Infinity, far = 0;
+  for (let i=0;i<state.segPts.length;i+=step){
+    const p = state.segPts[i];
+    const d = Math.hypot(p[0], p[2]);
+    near = Math.min(near, d); far = Math.max(far, d);
+    v.fromArray(p).project(camera);
+    checked++;
+    if (Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1 && v.z > -1 && v.z < 1) inFrame++;
+  }
+  const c = trackCentroid();
+  const bearing = (Math.atan2(c[0], -c[2]) * 180/Math.PI + 360) % 360;
+  const elev = Math.atan2(c[1] - camera.position.y, Math.hypot(c[0], c[2])) * 180/Math.PI;
+  const warn = inFrame === 0 ? '<span class="err">0 Punkte im Bild — „Kamera auf den Track richten“ drücken.</span>\n' : "";
+  el.innerHTML = warn
+    + "Standort " + (state.camEle + state.eye).toFixed(0) + " m ü. NN\n"
+    + "Track: " + (near/1000).toFixed(2) + "–" + (far/1000).toFixed(2) + " km entfernt\n"
+    + "Trackmitte: Peilung " + bearing.toFixed(0) + "° · Höhenwinkel " + elev.toFixed(1) + "°\n"
+    + "im Bild: " + inFrame + "/" + checked + " Stichproben";
+}
+function trackCentroid(){
+  let x=0,y=0,z=0;
+  for (const p of state.segPts){ x+=p[0]; y+=p[1]; z+=p[2]; }
+  const n = state.segPts.length;
+  return [x/n, y/n, z/n];
+}
+function aimAtTrack(keepYaw){
+  if (!state.segPts || !state.segPts.length) return;
+  updateCamera();                       // Standorthöhe muss aktuell sein
+  const c = trackCentroid();
+  const dist = Math.hypot(c[0], c[2]);
+  const yaw = keepYaw ? state.yaw : Math.atan2(c[0], -c[2]) * 180/Math.PI;
+  const pitch = Math.atan2(c[1] - camera.position.y, dist) * 180/Math.PI;
+  $("yaw").value = yaw.toFixed(1);   $("yaw").dispatchEvent(new Event("input"));
+  $("pitch").value = Math.max(-89, Math.min(89, pitch)).toFixed(1);
+  $("pitch").dispatchEvent(new Event("input"));
+}
+
+/* ---------- UI-Verdrahtung ---------- */
+function slider(id, valId, fmt, apply){
+  const el = $(id);
+  const upd = () => {
+    const v = parseFloat(el.value);
+    $(valId).textContent = fmt(v);
+    apply(v);
+    render();
+  };
+  el.addEventListener("input", upd);
+  return upd;
+}
+
+initGL();
+addEventListener("resize", layout);
+
+const updYaw   = slider("yaw","vYaw",   v=>v.toFixed(1)+"°", v=>state.yaw=v);
+const updPitch = slider("pitch","vPitch", v=>v.toFixed(1)+"°", v=>state.pitch=v);
+const updRoll  = slider("roll","vRoll",  v=>v.toFixed(2)+"°", v=>state.roll=v);
+const updFov   = slider("fov","vFov",    v=>v.toFixed(1)+"°", v=>state.hfov=v);
+slider("k1","vK1", v=>v.toFixed(3), v=>state.k1=v);
+slider("eye","vEye",   v=>v.toFixed(1)+" m", v=>state.eye=v);
+slider("width","vWidth", v=>v+" px",       v=>state.width=v);
+slider("op","vOp",     v=>Math.round(v)+" %", v=>state.opacity=v/100);
+slider("brush","vBrush", v=>v+" px", ()=>{});
+slider("terOp","vTerOp", v=>v+" %", v=>{
+  if (terrainSolid) terrainSolid.material.opacity = v/100;
+  if (terrainWire)  terrainWire.material.opacity  = v/100;
+});
+$("camEle").addEventListener("input", e=>{
+  const v = parseFloat(e.target.value);
+  if (isFinite(v)){ state.camEle = v; render(); }
+});
+$("aim").addEventListener("click", ()=>aimAtTrack());
+$("solve").addEventListener("click", solveCalibration);
+$("clearPins").addEventListener("click", ()=>{
+  state.pins = []; $("calib").textContent = ""; render();
+});
+$("thin").addEventListener("change", ()=>{ buildThinLine(); render(); });
+
+function alongPoint(){
+  const f = parseFloat($("along").value)/1000;
+  const i = Math.min(state.track.length-1, Math.round(f*(state.track.length-1)));
+  $("vAlong").textContent = Math.round(f*100)+" %";
+  return state.track[i];
+}
+$("along").addEventListener("input", ()=>{
+  if (!state.track) return;
+  const p = alongPoint();
+  $("camLat").value = p.lat.toFixed(6);
+  $("camLon").value = p.lon.toFixed(6);
+});
+$("along").addEventListener("change", ()=>{      // erst beim Loslassen neu rechnen
+  if (!state.track) return;
+  const p = alongPoint();
+  setOrigin(p.lat, p.lon);
+});
+["camLat","camLon"].forEach(id => $(id).addEventListener("change", ()=>{
+  // "46.9123, 12.0987" darf komplett ins Breitenfeld gepastet werden
+  const m = $("camLat").value.match(/(-?\d+[.,]?\d*)\s*[,;\s]\s*(-?\d+[.,]?\d*)/);
+  if (m){ $("camLat").value = m[1].replace(",", "."); $("camLon").value = m[2].replace(",", "."); }
+  const la = parseFloat($("camLat").value), lo = parseFloat($("camLon").value);
+  if (isFinite(la) && isFinite(lo)) setOrigin(la, lo);
+}));
+function setOrigin(lat, lon){
+  if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180){
+    log("Standort ungültig — Breite/Länge prüfen.", "err");
+    return;
+  }
+  state.origin = {lat, lon};
+  // Standorthöhe: aus dem Geländemodell, sonst vom nächstgelegenen Trackpunkt
+  let ele = state.dem ? demElev(state.dem, lat, lon) : null;
+  if (ele === null && state.track){
+    let best = Infinity;
+    for (const p of state.track){
+      const d = Math.hypot((p.lat-lat)*M_PER_DEG_LAT, (p.lon-lon)*mPerDegLon(lat));
+      if (d < best){ best = d; ele = p.ele; }
+    }
+  }
+  if (ele !== null){ state.camEle = ele; $("camEle").value = Math.round(ele); }
+  buildTrack();
+  if (state.dem) buildTerrain(state.dem, parseFloat($("terRadius").value)*1000);
+  if (state.track) warnAboutDistance();
+  render();
+}
+function warnAboutDistance(){
+  const p = state.track[0];
+  const d = Math.hypot((p.lat-state.origin.lat)*M_PER_DEG_LAT,
+                       (p.lon-state.origin.lon)*mPerDegLon(state.origin.lat)) / 1000;
+  if (d > 60) log("Standort liegt "+d.toFixed(0)+" km vom Track entfernt — vermutlich falsche Koordinaten.", "err");
+}
+
+/* Farbauswahl */
+["#ff3b30","#ffd166","#5ad1a0","#4aa8ff","#ffffff","#111111"].forEach(c=>{
+  const b = document.createElement("button");
+  b.style.background = c; b.title = c;
+  b.onclick = ()=>{ state.color = c; render(); };
+  $("colors").appendChild(b);
+});
+
+/* Modus / Geländeansicht */
+let mode = "rotate";
+$("mode").addEventListener("click", e=>{
+  const b = e.target.closest("button"); if (!b) return;
+  mode = b.dataset.m;
+  [...$("mode").children].forEach(x => x.setAttribute("aria-pressed", x===b));
+  $("gl").classList.toggle("erasing", mode === "erase" || mode === "pin");
+  render();
+});
+$("terView").addEventListener("click", e=>{
+  const b = e.target.closest("button"); if (!b) return;
+  [...$("terView").children].forEach(x => x.setAttribute("aria-pressed", x===b));
+  if (terrainSolid) terrainSolid.visible = b.dataset.v === "solid";
+  if (terrainWire)  terrainWire.visible  = b.dataset.v === "wire";
+  render();
+});
+$("occl").addEventListener("change", ()=>{ applyOcclusion(); render(); });
+$("resetErase").addEventListener("click", ()=>{
+  if (state.segVis){ state.segVis.fill(1); setSegVisibility(); }
+});
+
+/* Dateien */
+$("fPhoto").addEventListener("change", async e=>{
+  const f = e.target.files[0]; if (!f) return;
+  const buf = await f.arrayBuffer();
+  const img = new Image();
+  img.onload = ()=>{
+    state.photo = img;
+    $("photo").src = img.src;
+    $("empty").style.display = "none";
+    $("frame").style.display = "block";
+    layout();
+    let info = "Foto: "+img.naturalWidth+"×"+img.naturalHeight;
+    let ex = null;
+    try { ex = readExif(buf); } catch(err){}
+    if (ex && ex.lat != null){
+      $("camLat").value = ex.lat.toFixed(6);
+      $("camLon").value = ex.lon.toFixed(6);
+      setOrigin(ex.lat, ex.lon);
+      info += " · Standort aus EXIF übernommen";
+    }
+    if (ex && ex.focal35){
+      // 35-mm-Äquivalent bezieht sich auf die Diagonale des Kleinbildformats
+      const diag = 2*Math.atan(43.267/(2*ex.focal35));
+      const ar = img.naturalWidth/img.naturalHeight;
+      const hf = 2*Math.atan(Math.tan(diag/2) * ar/Math.hypot(ar,1)) * 180/Math.PI;
+      $("fov").value = hf.toFixed(1); updFov();
+      info += " · Bildwinkel aus Brennweite ("+Math.round(ex.focal35)+" mm)";
+    }
+    if (ex && ex.heading != null){
+      $("yaw").value = ((ex.heading+180)%360-180).toFixed(1); updYaw();
+      state.exifHeading = true;
+      info += " · Blickrichtung aus EXIF";
+    }
+    if (state.track && !state.exifHeading) aimAtTrack();
+    log(info, "ok");
+  };
+  img.onerror = ()=> log("Bild konnte nicht geladen werden.", "err");
+  img.src = URL.createObjectURL(f);
+});
+
+$("fGpx").addEventListener("change", async e=>{
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    state.track = parseGpx(await f.text());
+    state.segVis = null;
+    const noEle = state.track.filter(p => p.ele === 0).length > state.track.length*0.9;
+    if (state.origin.lat === 46.9 && state.origin.lon === 12.1){
+      const p = state.track[0];
+      $("camLat").value = p.lat.toFixed(6);
+      $("camLon").value = p.lon.toFixed(6);
+      setOrigin(p.lat, p.lon);
+    } else {
+      setOrigin(state.origin.lat, state.origin.lon);
+    }
+    aimAtTrack(state.exifHeading);
+    log("Track: "+state.track.length+" Punkte geladen."
+        + (noEle ? "\nAchtung: keine Höhenwerte im GPX. Höhendaten laden und "
+                 + "„Track-Höhen aus dem Geländemodell“ drücken." : ""),
+        noEle ? "err" : "ok");
+  } catch(err){ log("GPX-Fehler: "+err.message, "err"); }
+});
+
+/* Höhendaten */
+$("loadTerrain").addEventListener("click", async ()=>{
+  const z = Math.round(parseFloat($("terZoom").value));
+  const radius = parseFloat($("terRadius").value)*1000;
+  const lat = state.origin.lat, lon = state.origin.lon;
+  const dLat = radius / M_PER_DEG_LAT, dLon = radius / mPerDegLon(lat);
+  const x0 = Math.floor(lon2px(lon-dLon, z)/256), x1 = Math.floor(lon2px(lon+dLon, z)/256);
+  const y0 = Math.floor(lat2px(lat+dLat, z)/256), y1 = Math.floor(lat2px(lat-dLat, z)/256);
+  const jobs = [];
+  for (let x=x0;x<=x1;x++) for (let y=y0;y<=y1;y++) jobs.push([x,y]);
+  if (jobs.length > 400){ log("Zu viele Kacheln ("+jobs.length+"). Radius kleiner oder Zoom niedriger.", "err"); return; }
+  $("loadTerrain").disabled = true;
+  log("Lade "+jobs.length+" Höhenkacheln …");
+  const tiles = new Map();
+  let done = 0, failed = 0;
+  await Promise.all(jobs.map(async ([x,y])=>{
+    const d = await loadTile(z,x,y);
+    if (d) tiles.set(x+"/"+y, d); else failed++;
+    if (++done % 5 === 0) log("Lade Höhenkacheln … "+done+"/"+jobs.length);
+  }));
+  $("loadTerrain").disabled = false;
+  if (tiles.size === 0){
+    log("Keine Höhendaten erhalten. Datei über einen lokalen Server öffnen (siehe Hinweis).", "err");
+    return;
+  }
+  state.dem = {z, tiles};
+  state.camEle = demElev(state.dem, lat, lon);
+  $("camEle").value = Math.round(state.camEle);
+  $("trackFromDem").disabled = false;
+  buildTerrain(state.dem, radius);
+  buildTrack();
+  render();
+  log("Gelände geladen · Standort "+Math.round(state.camEle)+" m ü. NN"
+      + (failed ? " · "+failed+" Kacheln fehlten" : ""), "ok");
+});
+
+$("trackFromDem").addEventListener("click", ()=>{
+  if (!state.dem || !state.track) return;
+  state.track.forEach(p => { p.ele = demElev(state.dem, p.lat, p.lon) + 2; });
+  buildTrack(); render();
+  log("Track-Höhen aus dem Geländemodell übernommen.", "ok");
+});
+
+/* Maus: drehen, rollen, zoomen, radieren */
+(function(){
+  const cv = $("gl");
+  let drag = false, lx = 0, ly = 0, shift = false;
+
+  function screenPos(v3){
+    const p = v3.clone().project(camera);
+    const r = cv.getBoundingClientRect();
+    return {
+      x: (p.x*0.5+0.5)*r.width,
+      y: (-p.y*0.5+0.5)*r.height,
+      behind: p.z > 1
+    };
+  }
+  function erase(ex, ey, restore){
+    if (!state.segPts) return;
+    const r = cv.getBoundingClientRect();
+    const mx = ex - r.left, my = ey - r.top;
+    const rad = parseFloat($("brush").value);
+    const v = new THREE.Vector3();
+    let changed = false;
+    for (let i=0;i<state.segVis.length;i++){
+      const A = state.segPts[i], B = state.segPts[i+1];
+      v.set((A[0]+B[0])/2, (A[1]+B[1])/2, (A[2]+B[2])/2);
+      const s = screenPos(v);
+      if (s.behind) continue;
+      const dx = s.x-mx, dy = s.y-my;
+      if (dx*dx + dy*dy < rad*rad){
+        const nv = restore ? 1 : 0;
+        if (state.segVis[i] !== nv){ state.segVis[i] = nv; changed = true; }
+      }
+    }
+    if (changed) setSegVisibility();
+  }
+
+  let pendingSeg = -1;
+  const norm = e => {
+    const r = cv.getBoundingClientRect();
+    return [(e.clientX-r.left)/r.width, (e.clientY-r.top)/r.height];
+  };
+  cv.addEventListener("pointerdown", e=>{
+    cv.setPointerCapture(e.pointerId);
+    drag = true; lx = e.clientX; ly = e.clientY; shift = e.shiftKey;
+    if (mode === "erase"){ erase(e.clientX, e.clientY, e.altKey); return; }
+    if (mode === "pin"){
+      const [nx, ny] = norm(e);
+      pendingSeg = state.segPts ? nearestSegment(nx, ny) : -1;
+      $("calib").innerHTML = pendingSeg < 0
+        ? '<span class="err">Dort liegt keine Linie — direkt auf der roten Spur anfassen.</span>'
+        : "Punkt aufgenommen, jetzt an die richtige Stelle ziehen und loslassen.";
+      return;
+    }
+    cv.classList.add("dragging");
+  });
+  cv.addEventListener("pointermove", e=>{
+    if (!drag) return;
+    if (mode === "erase"){ erase(e.clientX, e.clientY, e.altKey); return; }
+    if (mode === "pin") return;
+    const dx = e.clientX - lx, dy = e.clientY - ly;
+    lx = e.clientX; ly = e.clientY;
+    const r = cv.getBoundingClientRect();
+    const degPerPx = state.hfov / r.width;
+    if (shift || e.shiftKey){
+      $("roll").value = (state.roll + dx*0.05).toFixed(2); $("roll").dispatchEvent(new Event("input"));
+    } else {
+      $("yaw").value   = (state.yaw   - dx*degPerPx).toFixed(1); $("yaw").dispatchEvent(new Event("input"));
+      $("pitch").value = (state.pitch + dy*degPerPx).toFixed(1); $("pitch").dispatchEvent(new Event("input"));
+    }
+  });
+  ["pointerup","pointercancel"].forEach(ev => cv.addEventListener(ev, e=>{
+    if (mode === "pin" && drag && pendingSeg >= 0){
+      const [nx, ny] = norm(e);
+      state.pins.push({seg:pendingSeg, nx, ny});
+      $("calib").textContent = state.pins.length + " Passpunkt(e) gesetzt.";
+      pendingSeg = -1;
+      render();
+    }
+    drag = false; cv.classList.remove("dragging");
+  }));
+  cv.addEventListener("wheel", e=>{
+    e.preventDefault();
+    const f = Math.exp(e.deltaY * 0.0012);
+    $("fov").value = Math.min(120, Math.max(8, state.hfov * f)).toFixed(1);
+    $("fov").dispatchEvent(new Event("input"));
+  }, {passive:false});
+})();
+
+/* Export */
+$("save").addEventListener("click", ()=>{
+  if (!state.photo) return;
+  const W = state.photo.naturalWidth, H = state.photo.naturalHeight;
+  const prevW = renderer.domElement.clientWidth || W;
+  const scale = W / prevW;
+  const dpr = renderer.getPixelRatio();
+  renderer.setPixelRatio(1);
+  renderer.setSize(W, H, false);
+  lineUniforms.uResolution.value.set(W, H);
+  lineUniforms.uWidth.value = state.width * scale;
+  camera.aspect = W/H;
+  render();
+  const out = document.createElement("canvas");
+  out.width = W; out.height = H;
+  const ctx = out.getContext("2d");
+  ctx.drawImage(state.photo, 0, 0, W, H);
+  ctx.drawImage(renderer.domElement, 0, 0, W, H);
+  out.toBlob(b=>{
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(b);
+    a.download = "track-im-foto.png";
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+  }, "image/png");
+  renderer.setPixelRatio(dpr);
+  layout();
+});
+</script>
+</body>
+</html>
