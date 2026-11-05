@@ -114,6 +114,8 @@
   <div class="swatches" id="colors"></div>
   <label class="row"><b>Breite</b><i id="vWidth">4 px</i></label>
   <input type="range" id="width" min="1" max="20" step="0.5" value="4">
+  <label class="row"><b>Leuchten</b><i id="vGlow">8 px</i></label>
+  <input type="range" id="glow" min="0" max="30" step="1" value="8">
   <label class="row"><b>Deckkraft</b><i id="vOp">100 %</i></label>
   <input type="range" id="op" min="10" max="100" step="5" value="100">
   <label class="row"><b>Hinter Bergen ausblenden</b><input type="checkbox" id="occl" checked></label>
@@ -182,7 +184,7 @@ const state = {
   origin:{lat:46.9, lon:12.1},   // lokaler Ursprung = Kamerastandort
   yaw:0, pitch:0, roll:0, hfov:65,
   eye:1.6, camEle:0,             // camEle = Geländehöhe am Standort
-  color:"#ff3b30", width:4, opacity:1,
+  color:"#ff3b30", width:4, opacity:1, glow:8,
   pins:[],                       // [{i: Trackindex, nx, ny: Bildkoordinaten 0..1}]
   pending:null,                  // halber Passpunkt: {i} oder {nx, ny}
   erasing:false,
@@ -386,6 +388,7 @@ const lineUniforms = {
   uColor:      { value: new THREE.Color("#ff3b30") },
   uWidth:      { value: 4 },
   uOpacity:    { value: 1 },
+  uGlow:       { value: 8 },
   uResolution: { value: new THREE.Vector2(1,1) }
 };
 
@@ -396,8 +399,12 @@ const LINE_VS = `
   attribute float aVis;
   uniform vec2 uResolution;
   uniform float uWidth;
+  uniform float uGlow;
   varying float vVis;
   varying float vClip;
+  varying float vSide;   // Abstand quer zur Linie, px
+  varying float vU;      // Position längs des Segments, px (0 = A, vL = B)
+  varying float vL;
   void main(){
     vVis = aVis;
     vec4 cA = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
@@ -410,18 +417,38 @@ const LINE_VS = `
     if (length(dir) < 1e-6) dir = vec2(1.0, 0.0);
     dir = normalize(dir) * aDirSign;
     vec2 nrm = vec2(-dir.y, dir.x) / vec2(aspect, 1.0);
-    float px = uWidth / uResolution.y;   // halbe Breite in NDC-Einheiten
-    cA.xy += nrm * aSide * px * cA.w;
+    float hw = uWidth*0.5 + uGlow;            // halbe Breite inkl. Leuchten, px
+    float k = 2.0 / uResolution.y;            // px -> NDC
+    // quer aufweiten und über das Segmentende hinaus verlängern: Platz für runde Kappen
+    // dir zeigt an beiden Enden von A nach B, also A nach hinten, B nach vorn verlängern
+    cA.xy += (nrm * aSide - aDirSign * dir / vec2(aspect, 1.0)) * hw * k * cA.w;
     gl_Position = cA;
+    vL = length(sB - sA) / k;
+    vU = aDirSign > 0.0 ? -hw : vL + hw;
+    vSide = aSide * hw;
   }`;
 const LINE_FS = `
   uniform vec3 uColor;
   uniform float uOpacity;
+  uniform float uWidth;
+  uniform float uGlow;
   varying float vVis;
   varying float vClip;
+  varying float vSide;
+  varying float vU;
+  varying float vL;
   void main(){
     if (vVis < 0.5 || vClip < 0.5) discard;
-    gl_FragColor = vec4(uColor, uOpacity);
+    float hw = uWidth * 0.5;
+    // Abstand zum Segment (Kapsel) in px — runde Enden schließen die Lücken an Knicken
+    float d = length(vec2(max(0.0, max(-vU, vU - vL)), vSide));
+    float core = 1.0 - smoothstep(hw - 0.75, hw + 0.75, d);
+    float t = clamp((d - hw) / max(uGlow, 1e-3), 0.0, 1.0);
+    float glow = uGlow > 0.0 ? 0.55 * (1.0 - t) * (1.0 - t) : 0.0;
+    // mit Leuchten wird der Kern zur Mitte hin heller, wie bei einer Neonröhre
+    vec3 c = mix(uColor, vec3(1.0), uGlow > 0.0 ? 0.5 * (1.0 - d / hw) * core : 0.0);
+    float a = max(core, glow) * uOpacity;
+    gl_FragColor = vec4(c * a, a);                     // vormultipliziert, siehe MaxEquation
   }`;
 
 function initGL(){
@@ -472,7 +499,9 @@ function buildTrack(){
   g.computeBoundingSphere();
   const m = new THREE.ShaderMaterial({
     uniforms: lineUniforms, vertexShader: LINE_VS, fragmentShader: LINE_FS,
-    transparent:true, depthTest:true, depthWrite:false, side:THREE.DoubleSide
+    transparent:true, depthTest:true, depthWrite:false, side:THREE.DoubleSide,
+    // Maximum statt Überblenden: an Knicken und Kreuzungen addiert sich das Leuchten nicht auf
+    blending:THREE.CustomBlending, blendEquation:THREE.MaxEquation
   });
   trackMesh = new THREE.Mesh(g, m);
   trackMesh.frustumCulled = false;
@@ -871,6 +900,7 @@ function render(){
   lineUniforms.uColor.value.set(state.color);
   lineUniforms.uWidth.value = state.width;
   lineUniforms.uOpacity.value = state.opacity;
+  lineUniforms.uGlow.value = state.glow;
   renderer.render(scene, camera);
   drawOverlay();
   updateDiag();
@@ -921,6 +951,7 @@ const sliders = [
   ["fov","vFov",    v=>v.toFixed(1)+"°", "hfov"],
   ["eye","vEye",    v=>v.toFixed(1)+" m", "eye"],
   ["width","vWidth", v=>v+" px", "width"],
+  ["glow","vGlow",  v=>v ? v+" px" : "aus", "glow"],
   ["op","vOp",      v=>Math.round(v*100)+" %", "opacity", 100],
   ["brush","vBrush", v=>v+" px", null]
 ];
@@ -1193,10 +1224,11 @@ $("save").addEventListener("click", ()=>{
   renderer.setPixelRatio(1);
   renderer.setSize(W, H, false);
   lineUniforms.uResolution.value.set(W, H);
-  const width = state.width;
-  state.width = width * scale;           // render() setzt uWidth aus state.width
+  const {width, glow} = state;
+  state.width = width * scale;           // render() setzt die Uniforms aus state
+  state.glow = glow * scale;
   render();
-  state.width = width;
+  Object.assign(state, {width, glow});
   const out = document.createElement("canvas");
   out.width = W; out.height = H;
   const ctx = out.getContext("2d");
