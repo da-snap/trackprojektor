@@ -38,3 +38,7 @@ map tiles come from OpenTopoMap and OpenStreetMap.
 ## Publishing
 
 It's a static page. GitHub Pages works: Settings → Pages → deploy from branch `main`, root folder.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
